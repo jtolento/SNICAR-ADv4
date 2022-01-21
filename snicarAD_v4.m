@@ -1,4 +1,6 @@
- 
+%close all;
+%clear all;
+%clc;
 % %
 % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
 % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
@@ -97,6 +99,7 @@
 %                   Must have the same length as dz
 %                        1 = snow 
 %                        2 = ice
+%                        3 = water
 % 
 % rds_snw:       Array of snow layer effective grain radii [microns]
 %                  Must have same length as dz
@@ -235,8 +238,9 @@ if (0==1)
     flx_dwn_bb = 1.0;
 
     % COSINE OF SOLAR ZENITH ANGLE FOR DIRECT-BEAM RT
-    coszen = 0.5;
-  
+    %coszen = 0.5;
+    coszen = cos(deg2rad(15));
+
     % ICE REFRACTIVE INDEX DATASET TO USE:
     ice_ri = 3;
     
@@ -247,20 +251,29 @@ if (0==1)
 
     % SNOW OR ICE LAYER THICKNESSES [m]:
     %dz = [0.02 0.02 0.05];
-    dz = [1000];
+    %dz  = [0.01, 0.01, 0.01, 0.01, 0.01, 0.01];             %jpt
+    %dz = [1.0];    
+    for n = 1: 100
+        dz(n) = 1.0;
+    end
+    
     nbr_lyr = length(dz);  % number of layers
     
     % LAYER MEDIUM TYPE [ 1=snow, 2=ice]
     %  Must have same length as dz
-    lyr_typ(1:nbr_lyr) = [1];
-    
+    %lyr_typ(1:nbr_lyr) = [1];
+    %lyr_typ(1:nbr_lyr) = [1, 1, 2, 2, 3, 3];      %jpt
+    lyr_typ(1:nbr_lyr) = [3];
     % SNOW DENSITY FOR EACH LAYER (units: kg/m3)
-    rho_snw(1:nbr_lyr) = 150;
-
+    %rho_snw(1:nbr_lyr) = [150, 150, 800, 800, 1000, 1000];
+    rho_snw(1:nbr_lyr) = [150];
     % SNOW GRAIN SIZE FOR EACH SNOW LAYER ?R BUBBLE RADIUS FOR ICE
     % (units: microns):
     rds_snw(1:nbr_lyr) = 1000;
-  
+   
+    chl_wtr(1:nbr_lyr) = [0.01]; %chlorophyll concetration in water layer
+    string = '[Chl] = 0.01 mg/m^3';
+    
     % Options added by Cenlin He for nonspherical ice particles based on
     % the parameterizations described by He et al. (2017,
     % doi:10.1175/JCLI-D-17-0300.1)
@@ -356,7 +369,8 @@ else
     glc_alg_mss_cnc       = input_args.glc_alg_mss_cnc;  % GLACIER algae [UNITS ng/g] 
     glc_alg_rds           = input_args.glc_alg_rds;      % GLACIER algae radius [um]
     glc_alg_len           = input_args.glc_alg_len;      % GLACIER algae length [um]
-
+    chl_wtr               = input_args.chl_wtr;          % Chlorophyl content in water layer %JPT
+    string = '[Chl] = 0.5 mg/m^3';
     nbr_lyr       = length(dz);  % number of snow layers
 end;
 
@@ -398,10 +412,10 @@ elseif (ice_ri == 4)
 end;
 
 % find the first ice layer 
-%     occurs between the last snow layer and the first ice layer
-%     if the top layer is ice total refelction will occur @ high SZAs
+%     occurs between the last snow layer and the first ice or water layer
+%     if the top layer is ice/water total refelction will occur @ high SZAs
 %     we recommend including a SSL to avoid aphysical results 
-kfrsnl = find(lyr_typ==2, 1 );
+kfrsnl = find(lyr_typ==2 | lyr_typ==3, 1);
 if isempty(kfrsnl) == 1
                   kfrsnl=0;
 else
@@ -596,7 +610,11 @@ g_F07_p0 = [5.292852e-1,5.425909e-1,5.601598e-1,6.023407e-1,6.473899e-1,4.634944
 sigma_alg = alg_rds.*0.1;  % standard deviation of Gaussian size distribution [um] (consistent with Mie)
 rho_alg   = 1080;          % algae density [kg/m3] (consistent with Mie calculations)
 
-
+for iw = 1: nbr_wvl
+    for k = 1: nbr_lyr+1
+        g(iw,k) = 0;
+    end
+end
 % Establish layer-specific optical properties for ice and algae:
 for n=1:nbr_lyr
     
@@ -706,9 +724,9 @@ for n=1:nbr_lyr
         
         % Specific surface area ice [m2/kg]
         ssa(n) = (3*vlm_frac_air)/(rho_snw(n)*(rds_snw(n)*(10^-6)));
-        
+
     end
-    
+
     % algae, based on cell size and pigment concentrations:
     if (snw_alg_cell_nbr_conc(n) > 0)
         fl_alg = strcat(dir_alg,...
@@ -772,69 +790,142 @@ mss_cnc_aer(1:nbr_lyr,15)  = glc_alg_mss_cnc.*1E-9;
 
 % Calculate effective tau, omega, g for the (ice+algae+impurity) system
 for n=1:nbr_lyr
+    if(lyr_typ(n) == 1 || lyr_typ(n) == 2)
     
-    % Snow column mass [kg/m^2] (array)
-    % Mass of snow is ice+impurities
-    L_snw(n)     = rho_snw(n)*dz(n);
+        % Snow column mass [kg/m^2] (array)
+        % Mass of snow is ice+impurities
+        L_snw(n)     = rho_snw(n)*dz(n);
     
-     % burden and optical thickness of algae
-     if (snw_alg_cell_nbr_conc(n) > 0)
-         % mean algal cell volume (3rd moment of Gaussian distribution) by layer:
-         mean_vol_cell  = 4/3*pi * (alg_rds(n)^3 + 3*alg_rds(n)*sigma_alg(n)^2); %[um^3/cell]
+        % burden and optical thickness of algae
+        if (snw_alg_cell_nbr_conc(n) > 0)
+            % mean algal cell volume (3rd moment of Gaussian distribution) by layer:
+            mean_vol_cell  = 4/3*pi * (alg_rds(n)^3 + 3*alg_rds(n)*sigma_alg(n)^2); %[um^3/cell]
          
-         % mean mass per cell by layer:
-         mass_per_cell  = mean_vol_cell*1E-18*rho_alg; % [kg/cell]
+             % mean mass per cell by layer:
+             mass_per_cell  = mean_vol_cell*1E-18*rho_alg; % [kg/cell]
          
-         % mass concentration of algae by layer
-         mss_cnc_alg(n) = snw_alg_cell_nbr_conc(n)*1000*mass_per_cell; % [kg/kg]
+             % mass concentration of algae by layer
+            mss_cnc_alg(n) = snw_alg_cell_nbr_conc(n)*1000*mass_per_cell; % [kg/kg]
          
-         L_alg(n)     = L_snw(n)*mss_cnc_alg(n);
-         tau_alg(:,n) = L_alg(n).*ext_cff_mss_snw_alg(:,n);
-     else
-         L_alg(n)     = 0.0;
-         tau_alg(:,n) = 0.0;
-     end;
+             L_alg(n)     = L_snw(n)*mss_cnc_alg(n);
+            tau_alg(:,n) = L_alg(n).*ext_cff_mss_snw_alg(:,n);
+        else
+            L_alg(n)     = 0.0;
+            tau_alg(:,n) = 0.0;
+        end;
     
-    % burdens and optical thicknesses of LAI
-    for j=1:nbr_aer
-        L_aer(n,j)     = L_snw(n)*mss_cnc_aer(n,j);
-        tau_aer(:,n,j) = L_aer(n,j).*ext_cff_mss_aer(:,j);
-    end
+        % burdens and optical thicknesses of LAI
+        for j=1:nbr_aer
+            L_aer(n,j)     = L_snw(n)*mss_cnc_aer(n,j);
+            tau_aer(:,n,j) = L_aer(n,j).*ext_cff_mss_aer(:,j);
+        end
     
-    % ice mass = snow mass - impurity mass (generally a tiny correction)
-    L_ice(n)     =  L_snw(n) - L_alg(n) - sum(L_aer(n,:));
+        % ice mass = snow mass - impurity mass (generally a tiny correction)
+        L_ice(n)     =  L_snw(n) - L_alg(n) - sum(L_aer(n,:));
     
-    if (L_ice(n) < 0)
-        error(['Impurity load cannot exceed snow load. Snow mass ' ...
-               'is assumed to be that of ice+impurities, so the sum ' ...
-               'of impurity mixing ratios cannot exceed 1']);
-    end;
+       if (L_ice(n) < 0)
+         error(['Impurity load cannot exceed snow load. Snow mass ' ...
+                   'is assumed to be that of ice+impurities, so the sum ' ...
+                   'of impurity mixing ratios cannot exceed 1']);
+        end;
     
-    % optical thickness due to ice:
-    tau_ice(:,n) = L_ice(n).*ext_cff_mss_ice(:,n);
+        % optical thickness due to ice:
+        tau_ice(:,n) = L_ice(n).*ext_cff_mss_ice(:,n);
     
-    tau_sum(1:nbr_wvl,1)   = 0.0;
-    omega_sum(1:nbr_wvl,1) = 0.0;
-    g_sum(1:nbr_wvl,1)     = 0.0;
+        tau_sum(1:nbr_wvl,1)   = 0.0;
+        omega_sum(1:nbr_wvl,1) = 0.0;
+        g_sum(1:nbr_wvl,1)     = 0.0;
     
-    for j=1:nbr_aer
-        tau_sum   = tau_sum + tau_aer(:,n,j);
-        omega_sum = omega_sum + (tau_aer(:,n,j).*omega_aer(:,j));
-        g_sum     = g_sum + (tau_aer(:,n,j).*omega_aer(:,j).*g_aer(:,j));
-    end
+        for j=1:nbr_aer
+            tau_sum   = tau_sum + tau_aer(:,n,j);
+            omega_sum = omega_sum + (tau_aer(:,n,j).*omega_aer(:,j));
+            g_sum     = g_sum + (tau_aer(:,n,j).*omega_aer(:,j).*g_aer(:,j));
+        end
   
-    % add algae contribution to weighted LAI sums:
-    if (snw_alg_cell_nbr_conc(n) > 0)
-        tau_sum   = tau_sum + tau_alg(:,n);
-        omega_sum = omega_sum + (tau_alg(:,n).*omega_snw_alg(:,n));
-        g_sum     = g_sum + (tau_alg(:,n).*omega_snw_alg(:,n).*g_snw_alg(:,n));
-    end;
+        % add algae contribution to weighted LAI sums:
+        if (snw_alg_cell_nbr_conc(n) > 0)
+            tau_sum   = tau_sum + tau_alg(:,n);
+            omega_sum = omega_sum + (tau_alg(:,n).*omega_snw_alg(:,n));
+            g_sum     = g_sum + (tau_alg(:,n).*omega_snw_alg(:,n).*g_snw_alg(:,n));
+        end;
     
-    % weighted sums, including ice:
-    tau(:,n)   = tau_sum + tau_ice(:,n);
-    omega(:,n) = (1./tau(:,n)).*(omega_sum+ (omega_ice(:,n).*tau_ice(:,n)));
-    g(:,n)     = (1./(tau(:,n).*omega(:,n))) .* (g_sum+ (g_ice(:,n).*omega_ice(:,n).*tau_ice(:,n)));
+        % weighted sums, including ice:
+        tau(:,n)   = tau_sum + tau_ice(:,n);
+        omega(:,n) = (1./tau(:,n)).*(omega_sum+ (omega_ice(:,n).*tau_ice(:,n)));
+        g(:,n)     = (1./(tau(:,n).*omega(:,n))) .* (g_sum+ (g_ice(:,n).*omega_ice(:,n).*tau_ice(:,n)));
+    end
 end
+
+% Constants to calculate chlorophyll IOP's JPT
+c0_chl = 0.407;
+n_chl = 0.795;
+A_chl = readmatrix('A_chl.txt');
+E_chl = readmatrix('E_chl.txt');
+for iw=nbr_wvl
+    if (wvl(iw)<0.3 || wvl(iw)>1.0)
+        A_chl(iw) = 0;
+    end
+end
+S = 0.014*(10^3);
+wvl0 = .440;
+f_y   = 0.2;
+k=1;
+for n=1:nbr_lyr
+    if(lyr_typ(n) == 3) % WATER CODE
+        g_wtr(:,n)            = (wvl./wvl)' .* 0;     % asymmetry parameter
+        abs_cff_wtr           = ((4 * pi * rfidx_ice_im) ./ (wvl * 1E-6));%/rho_ice; % %JPT: Why divide by rho ice? 
+        sca_cff_wtr(:,n)      = readmatrix('scatt_wtr.txt');
+        ext_cff_wtr(:,n)      = sca_cff_wtr(:,n) + abs_cff_wtr';
+        tau_wtr(:,n)          = ext_cff_wtr(:,n) * dz(n);
+        omega_wtr(:,n)        = sca_cff_wtr(:,n)./ext_cff_wtr(:,n);
+        tau(:,n)              = tau_wtr(:,n);
+        omega(:,n)            = omega_wtr(:,n);
+        g(:,n)                = g_wtr(:,n);
+        if(chl_wtr(n)>0.0)
+            abs_cff_chl(:,n) = A_chl.*chl_wtr(n).^E_chl;
+            if(chl_wtr(n)>0.02 && chl_wtr(n)<2.0)
+                v = 0.5 * (log10(chl_wtr(n))-0.3);
+            elseif(chl_wtr(n)>2.0)
+                v = 0;
+            else
+                v = -1;
+            end           
+            
+            ext_cff_chl = c0_chl * chl_wtr(n).^n_chl .* (wvl'/0.660).^v;
+            sca_cff_chl = ext_cff_chl - abs_cff_chl(:,n);
+            %if(sca_cff_chl<0.0)
+            %    sca_cff_chl = 0.0;
+            %end
+            %ext_cff_chl = sca_cff_chl + abs_cff_chl(:,n);
+            tau_chl(:,n) = ext_cff_chl*dz(n);
+            omega_chl_wtr(:,n) = sca_cff_chl./ext_cff_chl;
+            
+            a_s = 0.855*(0.5 - 0.25*log10(chl_wtr));
+            a_l = 1 - a_s;
+            g1 = 0.99;
+            g2 = 0.924;
+            B_hg = @(theta,g) (1/(4*pi))* (1-g^2)./ ((1+g^2-2.*g.*cos(theta)).^(3/2));
+            B = @(theta) a_s * B_hg(theta,g1) + a_l*B_hg(theta, g2);
+            phs_func_chl_nrm = @(theta) B(theta).*sin(theta);
+            phs_func_chl     = @(theta) phs_func_chl_nrm(theta).*cos(theta);
+            nrm_asm_par      =  integral(phs_func_chl_nrm,0,pi);
+            g_chl(:,n)       = (wvl./wvl)' .*(integral(phs_func_chl,0,pi))./ nrm_asm_par;
+             
+          
+            %CDOM
+            abc_cff_cdom(:,n) = f_y * abs_cff_chl(:,n).* (exp(-S.*(wvl - wvl0)))'; 
+            tau_cdom(:,n)     = abc_cff_cdom(:,n) *dz(n);
+            
+            %net tau,omega,g
+            tau(:,n)   = tau_wtr(:,n) + tau_chl(:,n) + tau_cdom(:,n);
+            omega(:,n) = (1./tau(:,n)).*(omega_wtr(:,n) .*tau_wtr(:,n) + (tau_chl(:,n).*omega_chl_wtr(:,n)));
+            g(:,n)     = (1./(omega(:,n).*tau(:,n))).* ((g_wtr(:,n).*tau_wtr(:,n).*omega_wtr(:,n)) + (g_chl(:,n).*tau_chl(:,n).*omega_chl_wtr(:,n)));
+        end
+    
+    end 
+end
+
+
 
 
 % ----- BEGIN Radiative Solver Adding Doubling Method -----
@@ -1216,8 +1307,8 @@ F_abs_nir_btm = sum(F_btm_net(vis_max_idx+1:nir_max_idx));
 
 
 % Radiative heating rate:
-heating_rate = F_abs_slr./(L_snw.*2117);   %[K/s], 2117 = specific heat ice (J kg-1 K-1)
-heating_rate = heating_rate.*3600;         %[K/hr]
+%heating_rate = F_abs_slr./(L_snw.*2117);   %[K/s], 2117 = specific heat ice (J kg-1 K-1)
+%heating_rate = heating_rate.*3600;         %[K/hr]
 
 % Energy conservation check:
 % Incident direct+diffuse radiation equals (absorbed+transmitted+bulk_reflected)
@@ -1283,24 +1374,41 @@ data_out.flx_dwn_top_slr = flx_dwn_top_slr;    % downwelling solar broadband flu
 data_out.flx_dwn_top_vis = flx_dwn_top_vis;    % downwelling visible broadband flux on upper boundary [W/m2]
 data_out.flx_dwn_top_nir = flx_dwn_top_nir;    % downwelling visible broadband flux on upper boundary [W/m2]
 
-data_out.vlm_frc_air    = vlm_air;            % volume fraction of air in each ice layer [unitless m3/m3]
-data_out.No_bbl_cnc     = No;                 % number concentration of air bubbles in ice [bbls/m3]
-data_out.ssa            = ssa;                % specific surface area of snow or ice [m2/kg]
-
+%data_out.vlm_frc_air    = vlm_air;            % volume fraction of air in each ice layer [unitless m3/m3]
+%data_out.No_bbl_cnc     = No;                 % number concentration of air bubbles in ice [bbls/m3]
+%data_out.ssa            = ssa;                % specific surface area of snow or ice [m2/kg]
 
 if (0==1)
-    figure(1)
+    figure(3)
     hold on
-    plot(data_out.wvl,data_out.albedo,'linewidth',3,'DisplayName','SNICAR-ADv3');
+    plot(data_out.wvl,data_out.albedo,'linewidth',3,'DisplayName',string);
     axis([0.2 1.8 0 1]);
     set(gca,'xtick',0.2:0.2:1.8,'fontsize',14)
     set(gca,'ytick',0:0.1:1,'fontsize',14);
     xlabel('Wavelength (\mum)','fontsize',20);
-    ylabel('Hemispheric Albedo','fontsize',20);
     grid on;
     legend();
 end;
 
+for n=1:nbr_lyr
+    trn_flx(n) = sum(F_dwn(:,n));
+end
+dpth = linspace(1,100,100);
+if (0==1)
+    figure(2)
+    semilogx(trn_flx,dpth,'linewidth',3, 'DisplayName', string);
+    %semilogx(trn_flx,dpth)
+    set(gca, 'YDir','reverse')
+    axis([0.0001 1.0 0 80]);
+    %set(gca,'xtick',0.2:0.2:1.8,'fontsize',14)
+    %set(gca,'ytick',0:0.1:1,'fontsize',14);
+    title('Transimission with varying Chl concetrations ','fontsize',20);
+    xlabel('Flux Transmitted','fontsize',20);
+    ylabel('Depth','fontsize',20);
+    grid on;
+    hold on;
+    legend();
+end
 
 end % end of function
 
